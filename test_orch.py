@@ -209,3 +209,25 @@ def test_changed_files_and_save_diff(repo, tmp_path, monkeypatch):
     assert sorted(orch.changed_files(str(repo), base)) == ["a.py", "b.py", "c.py"]
     p = orch.save_diff(str(repo), base, "x")
     assert p.name == "x.diff" and "+a1" in p.read_text()
+
+
+# --- timeouts + dry-run ---
+
+def test_free_agents_time_out_sooner(monkeypatch):
+    seen = {}
+    class R: returncode = 0; stdout = ""; stderr = ""
+    def fake_run(cmd, **kw): seen[cmd[0]] = kw["timeout"]; return R()
+    monkeypatch.setattr(orch.subprocess, "run", fake_run)
+    orch.run_agent("opencode", "p", "."); orch.run_agent("claude", "p", ".")
+    assert seen["opencode"] == 600 and seen["claude"] == 1800
+
+
+def test_dry_run_spawns_nothing(tmp_path, monkeypatch, capsys):
+    monkeypatch.setattr(orch, "run_isolated", lambda *a: (_ for _ in ()).throw(AssertionError("spawned")))
+    steps = [
+        {"id": "a", "task": "backend", "owns": ["x"], "prompt": "1"},
+        {"id": "b", "task": "qa", "needs": ["a"], "owns": ["y"], "prompt": "2"},
+    ]
+    orch.main(_pipeline(tmp_path, steps), dry_run=True)
+    out = capsys.readouterr().out
+    assert "wave 1: a" in out and "wave 2: b" in out and "backend" in out

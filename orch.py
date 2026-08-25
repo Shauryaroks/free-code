@@ -92,8 +92,10 @@ def run_agent(agent, prompt, cwd):
     # subprocess cwd= does not update $PWD; node/bun CLIs (opencode) trust $PWD and
     # will happily write into the orchestrator's own directory. Set both.
     env = {**os.environ, "PWD": cwd}
+    # ponytail: free tiers throttle; don't let a stalled one cost 30 min before the router learns
+    timeout = 600 if a["cost"] == 0 else 1800
     r = subprocess.run(cmd + [prompt], cwd=cwd, env=env, capture_output=True, text=True,
-                       timeout=1800, stdin=subprocess.DEVNULL)   # codex exec slurps stdin
+                       timeout=timeout, stdin=subprocess.DEVNULL)   # codex exec slurps stdin
     return r.returncode == 0, r.stdout + r.stderr, time.time() - t
 
 
@@ -273,10 +275,25 @@ def run_isolated(repo, step, budget):
         raise RuntimeError(f"{step['id']}: {e}") from e
 
 
-def main(pipeline_path):
+def main(pipeline_path, dry_run=False):
     pipeline = json.loads(pathlib.Path(pipeline_path).read_text())
     repo, steps = pipeline.get("repo", "."), pipeline["steps"]
     validate_ownership(steps)
+    if dry_run:
+        done, pending, wave = set(), list(steps), 0
+        while pending:
+            ready = [s for s in pending if set(s.get("needs", [])) <= done]
+            if not ready:
+                raise SystemExit(f"deadlock: {[s['id'] for s in pending]} have unmet needs")
+            wave += 1
+            print(f"wave {wave}: {', '.join(s['id'] for s in ready)}")
+            for s in ready:
+                route = [a for a in ROUTES[s["task"]] if available(a)]
+                route.sort(key=lambda a: cost_per_pass(s["task"], a))
+                print(f"  {s['id']:<12} {s['task']:<9} owns={s['owns']}  route={route}")
+            done |= {s["id"] for s in ready}
+            pending = [s for s in pending if s["id"] not in done]
+        return
     budget = {"left": pipeline.get("budget", 20)}
     done, pending, wave = set(), list(steps), 0
     STOP.unlink(missing_ok=True)
@@ -320,4 +337,5 @@ def main(pipeline_path):
 
 
 if __name__ == "__main__":
-    main(sys.argv[1] if len(sys.argv) > 1 else "pipeline.json")
+    args = [a for a in sys.argv[1:] if not a.startswith("--")]
+    main(args[0] if args else "pipeline.json", dry_run="--dry-run" in sys.argv)
