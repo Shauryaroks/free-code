@@ -30,6 +30,9 @@ AGENTS = {
                  "cost": 3},
 }
 
+# Optional per-agent "model": passed as --model <name>. Leave unset for the CLI default.
+# See `agy models`, `opencode models`, `codex --help`, `claude --help` for names.
+
 # task type -> agents to try, cheapest first. Escalation order, not a fixed assignment.
 # ponytail: hand-ordered priors; cost_per_pass() overrides them once stats exist.
 ROUTES = {
@@ -90,6 +93,8 @@ def run_agent(agent, prompt, cwd):
     t = time.time()
     cwd = str(pathlib.Path(cwd).resolve())
     cmd = [c.replace("{cwd}", cwd) for c in a["cmd"]]
+    if a.get("model"):
+        cmd += ["--model", a["model"]]
     # subprocess cwd= does not update $PWD; node/bun CLIs (opencode) trust $PWD and
     # will happily write into the orchestrator's own directory. Set both.
     env = {**os.environ, "PWD": cwd}
@@ -109,6 +114,16 @@ def parse_tokens(agent, out):
             return sum(v for k, v in u.items() if k.endswith("tokens") and isinstance(v, int))
     m = re.search(r"tokens used\s*\n?\s*([\d,]+)", out)
     return int(m.group(1).replace(",", "")) if m else None
+
+
+def parse_model(agent, out):
+    """Which model the CLI actually used, if it says."""
+    if agent == "claude":
+        m = re.search(r'"modelUsage"\s*:\s*\{\s*"([^"]+)"', out)
+        if m:
+            return m.group(1)
+    m = re.search(r"^\s*model:\s*(\S+)", out, re.M)
+    return m.group(1) if m else None
 
 
 def gate(step, cwd):
@@ -144,12 +159,13 @@ def run_step(step, cwd, budget):
         RUNS.mkdir(exist_ok=True)
         (RUNS / f"{step['id']}.{agent}.out").write_text(out)
         tokens = parse_tokens(agent, out)
+        model = AGENTS[agent].get("model") or parse_model(agent, out) or "default"
         passed, why = gate(step, cwd) if ok else (False, out[-2000:])
         record(task, agent, passed)
         print(f"     {'PASS' if passed else 'FAIL'} in {secs:.0f}s" + (f", {tokens} tokens" if tokens else ""))
         attempts = _state["steps"].get(step["id"], {}).get("attempts", 0) + 1
         emit(step["id"], status="passed" if passed else "escalating", secs=round(secs),
-             tokens=tokens, attempts=attempts, tail=why[-1500:],
+             tokens=tokens, model=model, attempts=attempts, tail=why[-1500:],
              msg=f"{'PASS' if passed else 'FAIL'} on {agent} ({secs:.0f}s, {tokens or '?'} tokens)")
         if passed:
             return agent
@@ -359,7 +375,7 @@ def main(pipeline_path, dry_run=False, serial=False):
     emit(status="done", budget=budget["left"], wall=wall, msg=f"run complete in {wall}s")
     (RUNS / "summary.json").write_text(json.dumps({
         "mode": _state["mode"], "wall": wall, "budget_left": budget["left"],
-        "steps": {k: {f: v.get(f) for f in ("agent", "secs", "tokens", "attempts", "out_of_bounds")}
+        "steps": {k: {f: v.get(f) for f in ("agent", "model", "secs", "tokens", "attempts", "out_of_bounds")}
                   for k, v in _state["steps"].items()}}, indent=1))
     print(f"\ndone in {wall}s. budget left: {budget['left']}")
 

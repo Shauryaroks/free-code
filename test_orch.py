@@ -273,3 +273,21 @@ def test_serial_runs_one_at_a_time(tmp_path, monkeypatch):
              {"id": "b", "task": "frontend", "owns": ["y"], "prompt": "2"}]
     orch.main(_pipeline(tmp_path, steps), serial=True)
     assert peak[0] == 1
+
+
+# --- model selection + detection ---
+
+def test_model_flag_is_appended_when_configured(monkeypatch):
+    seen = {}
+    class R: returncode = 0; stdout = ""; stderr = ""
+    monkeypatch.setattr(orch.subprocess, "run", lambda cmd, **kw: seen.setdefault("cmd", cmd) and R() or R())
+    monkeypatch.setitem(orch.AGENTS, "codex", {**orch.AGENTS["codex"], "model": "gpt-5.5-mini"})
+    orch.run_agent("codex", "p", ".")
+    assert "--model" in seen["cmd"] and seen["cmd"][seen["cmd"].index("--model") + 1] == "gpt-5.5-mini"
+    assert seen["cmd"][-1] == "p", "prompt stays last"
+
+
+def test_parse_model():
+    assert orch.parse_model("claude", '{"modelUsage":{"claude-fable-5":{"inputTokens":1}},"usage":{}}') == "claude-fable-5"
+    assert orch.parse_model("codex", "OpenAI Codex v0.149\nmodel: gpt-5.4-codex\nprovider: openai\n") == "gpt-5.4-codex"
+    assert orch.parse_model("opencode", "nothing") is None
