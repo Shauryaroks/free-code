@@ -13,6 +13,8 @@ STOP = ROOT / ".orch-stop"           # touch to halt after the current wave
 RUNS = ROOT / ".orch-runs"           # per-step diffs from the last run
 LOCK = threading.Lock()          # guards STATS/STATE + budget; agents run in threads
 _state = {"status": "idle", "wave": 0, "budget": None, "steps": {}, "log": []}
+EXHAUSTED = set()                # agents that hit a quota/rate limit this run; skipped thereafter
+QUOTA_RE = re.compile(r"usage limit|rate limit|quota|too many requests|\b429\b", re.I)
 
 # cost = relative $ per task. 0 = free tier (quota-limited, not free-forever).
 # Free-tier slots verified Aug 2026. Gemini CLI stopped serving free users 2026-06-18;
@@ -37,7 +39,7 @@ AGENTS = {
 # ponytail: hand-ordered priors; cost_per_pass() overrides them once stats exist.
 ROUTES = {
     "frontend": ["agy", "opencode", "codex", "claude"],
-    "backend":  ["codex", "opencode", "copilot", "claude"],
+    "backend":  ["codex", "agy", "opencode", "copilot", "claude"],
     "qa":       ["agy", "copilot", "crush", "claude"],
     "review":   ["claude"],          # quality gate: never cheap out on the judge
 }
@@ -100,8 +102,12 @@ def run_agent(agent, prompt, cwd):
     env = {**os.environ, "PWD": cwd}
     # ponytail: free tiers throttle; don't let a stalled one cost 30 min before the router learns
     timeout = 600 if a["cost"] == 0 else 1800
-    r = subprocess.run(cmd + [prompt], cwd=cwd, env=env, capture_output=True, text=True,
-                       timeout=timeout, stdin=subprocess.DEVNULL)   # codex exec slurps stdin
+    try:
+        r = subprocess.run(cmd + [prompt], cwd=cwd, env=env, capture_output=True, text=True,
+                           timeout=timeout, stdin=subprocess.DEVNULL)   # codex exec slurps stdin
+    except subprocess.TimeoutExpired as e:
+        partial = (e.stdout or b"").decode(errors="replace") if isinstance(e.stdout, bytes) else (e.stdout or "")
+        return False, f"{partial[-2000:]}\n[agent timed out after {timeout}s]", time.time() - t
     return r.returncode == 0, r.stdout + r.stderr, time.time() - t
 
 
@@ -156,6 +162,9 @@ def run_step(step, cwd, budget):
     prompt = step["prompt"]
 
     for agent in candidates:
+        if agent in EXHAUSTED:
+            print(f"  skip {agent}: quota exhausted this run")
+            continue
         with LOCK:                       # reserve before spending, or two threads
             if AGENTS[agent]["cost"] > budget["left"]:   # both spend the last dollar
                 print(f"  skip {agent}: over budget")
@@ -169,7 +178,11 @@ def run_step(step, cwd, budget):
         tokens = parse_tokens(agent, out)
         model = AGENTS[agent].get("model") or parse_model(agent, out) or "default"
         passed, why = gate(step, cwd) if ok else (False, out[-2000:])
-        record(task, agent, passed)
+        if not passed and QUOTA_RE.search(out):
+            EXHAUSTED.add(agent)         # not a skill signal: don't record it against the agent
+            emit(step["id"], msg=f"{agent} hit its quota; skipping it for the rest of the run")
+        else:
+            record(task, agent, passed)
         print(f"     {'PASS' if passed else 'FAIL'} in {secs:.0f}s" + (f", {tokens} tokens" if tokens else ""))
         attempts = _state["steps"].get(step["id"], {}).get("attempts", 0) + 1
         emit(step["id"], status="passed" if passed else "escalating", secs=round(secs),

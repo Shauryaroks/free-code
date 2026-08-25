@@ -291,3 +291,31 @@ def test_parse_model():
     assert orch.parse_model("claude", '{"modelUsage":{"claude-fable-5":{"inputTokens":1}},"usage":{}}') == "claude-fable-5"
     assert orch.parse_model("codex", "OpenAI Codex v0.149\nmodel: gpt-5.4-codex\nprovider: openai\n") == "gpt-5.4-codex"
     assert orch.parse_model("opencode", "nothing") is None
+
+
+# --- timeouts are failures, quota exhaustion is sticky and not a skill signal ---
+
+def test_timeout_is_a_failure_not_a_crash(monkeypatch):
+    def boom(cmd, **kw): raise orch.subprocess.TimeoutExpired(cmd, kw["timeout"])
+    monkeypatch.setattr(orch.subprocess, "run", boom)
+    ok, out, secs = orch.run_agent("opencode", "p", ".")
+    assert ok is False and "timed out" in out
+
+
+def test_exhausted_agent_is_skipped_and_not_counted(tmp_path, monkeypatch):
+    monkeypatch.setattr(orch, "available", lambda a: True)
+    orch.EXHAUSTED.clear()
+    calls = []
+    def fake(agent, prompt, cwd):
+        calls.append(agent)
+        if agent == "codex":
+            return False, "ERROR: You've hit your usage limit. Upgrade to Plus", 1.0
+        return True, "", 1.0
+    monkeypatch.setattr(orch, "run_agent", fake)
+    monkeypatch.setattr(orch, "gate", lambda s, c: (True, ""))
+    orch.run_step({"id": "a", "task": "backend", "prompt": "p"}, ".", {"left": 99})
+    assert calls[0] == "codex" and "codex" in orch.EXHAUSTED
+    assert "backend/codex" not in orch.stats(), "quota failure must not count against skill"
+    calls.clear()
+    orch.run_step({"id": "b", "task": "backend", "prompt": "p"}, ".", {"left": 99})
+    assert "codex" not in calls, "exhausted agent must be skipped for the rest of the run"
