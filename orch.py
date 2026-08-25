@@ -105,13 +105,22 @@ def run_agent(agent, prompt, cwd):
     return r.returncode == 0, r.stdout + r.stderr, time.time() - t
 
 
+def claude_result(out):
+    """claude --output-format json prints a list of messages; the last 'result' one has usage."""
+    try:
+        j = json.loads(out)
+    except ValueError:
+        return {}
+    if isinstance(j, list):
+        j = next((m for m in reversed(j) if m.get("type") == "result"), {})
+    return j if isinstance(j, dict) else {}
+
+
 def parse_tokens(agent, out):
     """Best-effort token count from an agent's stdout. None if the CLI doesn't say."""
     if agent == "claude":
-        m = re.search(r'"usage"\s*:\s*(\{[^{}]*\})', out)
-        if m:
-            u = json.loads(m.group(1))
-            return sum(v for k, v in u.items() if k.endswith("tokens") and isinstance(v, int))
+        u = claude_result(out).get("usage") or {}
+        return sum(v for k, v in u.items() if k.endswith("tokens") and isinstance(v, int)) or None
     m = re.search(r"tokens used\s*\n?\s*([\d,]+)", out)
     return int(m.group(1).replace(",", "")) if m else None
 
@@ -119,9 +128,8 @@ def parse_tokens(agent, out):
 def parse_model(agent, out):
     """Which model the CLI actually used, if it says."""
     if agent == "claude":
-        m = re.search(r'"modelUsage"\s*:\s*\{\s*"([^"]+)"', out)
-        if m:
-            return m.group(1)
+        mu = claude_result(out).get("modelUsage") or {}
+        return next(iter(mu), None)
     m = re.search(r"^\s*model:\s*(\S+)", out, re.M)
     return m.group(1) if m else None
 
