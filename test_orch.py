@@ -231,3 +231,19 @@ def test_dry_run_spawns_nothing(tmp_path, monkeypatch, capsys):
     orch.main(_pipeline(tmp_path, steps), dry_run=True)
     out = capsys.readouterr().out
     assert "wave 1: a" in out and "wave 2: b" in out and "backend" in out
+
+
+# --- "." means the whole tree; it must never be rm -rf'd and always overlaps ---
+
+def test_root_owner_overlaps_everything():
+    assert orch.overlaps(".", "boltons/x.py") and orch.overlaps("boltons/x.py", ".")
+
+
+def test_root_owner_has_no_out_of_bounds():
+    assert orch.out_of_bounds({"owns": ["."]}, ["a.py", "deep/b.py"]) == []
+
+
+def test_merge_back_root_owner_does_not_delete_repo(repo):
+    orch.merge_back(str(repo), {"id": "review", "task": "review", "owns": ["."]}, "orch/x")
+    assert (repo / ".git").exists(), "repo must survive a root-owned merge"
+    assert (repo / "a.py").read_text() == "a1\n" and (repo / "c.py").read_text() == "c1\n"

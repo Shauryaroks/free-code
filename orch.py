@@ -143,8 +143,8 @@ def run_step(step, cwd, budget):
 
 
 def owned(step):
-    """Directories this step may write. Ownership is how conflicts are prevented."""
-    return [d.strip("/") for d in step["owns"]]
+    """Paths (files or dirs) this step may write. "." means the whole tree."""
+    return [d.strip("/") or "." for d in step["owns"]]
 
 
 def ancestors(steps):
@@ -169,12 +169,16 @@ def ancestors(steps):
 
 
 def overlaps(a, b):
+    if a == "." or b == ".":
+        return True
     return a == b or a.startswith(b + "/") or b.startswith(a + "/")
 
 
 def out_of_bounds(step, files):
     """Changed files that no owned path covers. Discarded by merge_back; must be reported."""
     own = owned(step)
+    if "." in own:
+        return []
     return [f for f in files if not any(f == o or f.startswith(o.rstrip("/") + "/") for o in own)]
 
 
@@ -244,7 +248,8 @@ def merge_back(repo, step, branch):
     algorithm runs, so no conflict can occur -- validate_ownership already proved
     concurrent owners are disjoint. Remove first so agent deletions propagate."""
     for d in owned(step):
-        remove_path(pathlib.Path(repo) / d)
+        if d != ".":   # never rm -rf the repo itself. ponytail: root-owner deletions don't propagate
+            remove_path(pathlib.Path(repo) / d)
         subprocess.run(["git", "checkout", branch, "--", d], cwd=repo, capture_output=True)
     subprocess.run(["git", "add", "-A"], cwd=repo)
     subprocess.run(["git", "commit", "-qm", f"{step['id']} ({step['task']})"], cwd=repo)
