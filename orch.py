@@ -10,6 +10,7 @@ ROOT = pathlib.Path(__file__).parent
 STATS = ROOT / ".orch-stats.json"
 STATE = ROOT / ".orch-state.json"    # live run state; panel.py reads it
 STOP = ROOT / ".orch-stop"           # touch to halt after the current wave
+RUNS = ROOT / ".orch-runs"           # per-step diffs from the last run
 LOCK = threading.Lock()          # guards STATS/STATE + budget; agents run in threads
 _state = {"status": "idle", "wave": 0, "budget": None, "steps": {}, "log": []}
 
@@ -169,6 +170,26 @@ def overlaps(a, b):
     return a == b or a.startswith(b + "/") or b.startswith(a + "/")
 
 
+def out_of_bounds(step, files):
+    """Changed files that no owned path covers. Discarded by merge_back; must be reported."""
+    own = owned(step)
+    return [f for f in files if not any(f == o or f.startswith(o.rstrip("/") + "/") for o in own)]
+
+
+def changed_files(wt, base):
+    r = subprocess.run(["git", "diff", "--name-only", f"{base}..HEAD"], cwd=wt,
+                       capture_output=True, text=True)
+    return [f for f in r.stdout.splitlines() if f]
+
+
+def save_diff(wt, base, step_id):
+    RUNS.mkdir(exist_ok=True)
+    r = subprocess.run(["git", "diff", f"{base}..HEAD"], cwd=wt, capture_output=True, text=True)
+    p = RUNS / f"{step_id}.diff"
+    p.write_text(r.stdout)
+    return p
+
+
 def validate_ownership(steps):
     """Steps that can run concurrently must own disjoint paths.
 
@@ -202,7 +223,9 @@ def worktree(repo, step):
                        capture_output=True, text=True)
     if r.returncode:
         raise SystemExit(f"worktree failed for {step['id']}: {r.stderr}")
-    return str(wt), branch
+    base = subprocess.run(["git", "rev-parse", "HEAD"], cwd=repo,
+                          capture_output=True, text=True).stdout.strip()
+    return str(wt), branch, base
 
 
 def remove_path(p):
@@ -233,11 +256,16 @@ def cleanup(repo, step, branch):
 
 
 def run_isolated(repo, step, budget):
-    wt, branch = worktree(repo, step)
+    wt, branch, base = worktree(repo, step)
     try:
         agent = run_step(step, wt, budget)
         subprocess.run(["git", "add", "-A"], cwd=wt)
         subprocess.run(["git", "commit", "-qm", f"wip {step['id']}"], cwd=wt)
+        save_diff(wt, base, step["id"])
+        oob = out_of_bounds(step, changed_files(wt, base))
+        emit(step["id"], diff=True, out_of_bounds=oob,
+             msg=(f"WARNING out-of-bounds writes discarded: {', '.join(oob)}" if oob
+                  else "all writes in bounds"))
         return step, branch, agent
     except SystemExit as e:
         # ponytail: keep the failed worktree for inspection; next run recreates it

@@ -64,7 +64,9 @@ def _pipeline(tmp_path, steps, budget=99):
 
 def _stub_git(monkeypatch, order=None):
     """No git in tests. Records merge order if given a list."""
-    monkeypatch.setattr(orch, "worktree", lambda repo, s: (repo, f"orch/{s['id']}"))
+    monkeypatch.setattr(orch, "worktree", lambda repo, s: (repo, f"orch/{s['id']}", "base"))
+    monkeypatch.setattr(orch, "save_diff", lambda wt, base, sid: None)
+    monkeypatch.setattr(orch, "changed_files", lambda wt, base: [])
     monkeypatch.setattr(orch, "cleanup", lambda repo, s, b: None)
     monkeypatch.setattr(orch, "subprocess", type("S", (), {
         "run": staticmethod(lambda *a, **k: type("R", (), {"returncode": 0, "stdout": "", "stderr": ""})())}))
@@ -190,3 +192,20 @@ def test_merge_back_propagates_owned_file_deletion(repo):
     _git(repo, "add", "-A"); _git(repo, "commit", "-qm", "rm a"); _git(repo, "checkout", "-q", "master")
     orch.merge_back(str(repo), {"id": "x", "task": "backend", "owns": ["a.py"]}, "orch/x")
     assert not (repo / "a.py").exists()
+
+
+# --- out-of-bounds + change log ---
+
+def test_out_of_bounds_is_files_not_under_any_owned_path():
+    step = {"owns": ["boltons/strutils.py", "tests/"]}
+    files = ["boltons/strutils.py", "tests/test_strutils.py", "boltons/urlutils.py", "README.md"]
+    assert orch.out_of_bounds(step, files) == ["boltons/urlutils.py", "README.md"]
+
+
+def test_changed_files_and_save_diff(repo, tmp_path, monkeypatch):
+    monkeypatch.setattr(orch, "RUNS", tmp_path / "runs")
+    _git(repo, "checkout", "-q", "orch/x")
+    base = _git(repo, "rev-parse", "master").strip()
+    assert sorted(orch.changed_files(str(repo), base)) == ["a.py", "b.py", "c.py"]
+    p = orch.save_diff(str(repo), base, "x")
+    assert p.name == "x.diff" and "+a1" in p.read_text()
