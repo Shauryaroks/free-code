@@ -1,0 +1,24 @@
+{
+  "repo": "../my-app",
+  "budget": 20,
+  "steps": [
+    {"id": "contract", "task": "backend", "owns": ["contract"],
+     "prompt": "Write contract/openapi.yaml and contract/types.ts for a todos API: POST /api/todos, GET /api/todos. Touch nothing else.",
+     "check": "npx @redocly/cli lint contract/openapi.yaml"},
+
+    {"id": "backend", "task": "backend", "needs": ["contract"], "owns": ["src/api"],
+     "prompt": "Implement src/api to satisfy contract/openapi.yaml exactly. Do not edit contract/ or src/ui.",
+     "check": "npm test -- api"},
+
+    {"id": "frontend", "task": "frontend", "needs": ["contract"], "owns": ["src/ui"],
+     "prompt": "Build the todo UI in src/ui against contract/types.ts. Mock the network. Do not edit contract/ or src/api.",
+     "check": "npm run build && npm run lint"},
+
+    {"id": "qa", "task": "qa", "needs": ["backend", "frontend"], "owns": ["tests/e2e"],
+     "prompt": "Write and run e2e tests for creating and listing a todo.",
+     "check": "npm run test:e2e"},
+
+    {"id": "review", "task": "review", "needs": ["qa"], "owns": ["."],
+     "prompt": "Review all changes. Fix correctness and security bugs only. Do not refactor."}
+  ]
+}

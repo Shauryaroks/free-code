@@ -1,0 +1,15 @@
+{
+  "repo": "../orch-target",
+  "budget": 20,
+  "steps": [
+    {"id": "backend",  "task": "backend",  "owns": ["src/api"],
+     "prompt": "Create src/api/server.py containing a function hello() that returns the string 'api'. Do not create or edit anything outside src/api.",
+     "check": "test -f src/api/server.py && grep -qE \"['\\\"]api['\\\"]\" src/api/server.py"},
+    {"id": "frontend", "task": "frontend", "owns": ["src/ui"],
+     "prompt": "Create src/ui/index.html with an h1 that says Hello. Do not create or edit anything outside src/ui.",
+     "check": "test -f src/ui/index.html && grep -qi '<h1' src/ui/index.html"},
+    {"id": "qa", "task": "qa", "needs": ["backend", "frontend"], "owns": ["tests"],
+     "prompt": "Create tests/test_smoke.py that imports hello from src/api/server.py (add sys.path tweak as needed) and asserts it returns 'api'. Run it with python3 -m pytest tests -q and make sure it passes. Do not edit src/.",
+     "check": "python3 -m pytest tests -q"}
+  ]
+}
