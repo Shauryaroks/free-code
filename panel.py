@@ -8,6 +8,7 @@ import http.server, json, pathlib, sys
 ROOT = pathlib.Path(__file__).parent
 FILES = {"/state": ROOT / ".orch-state.json", "/stats": ROOT / ".orch-stats.json"}
 STOP = ROOT / ".orch-stop"
+RUNS = ROOT / ".orch-runs"
 
 PAGE = """<!doctype html><meta charset=utf-8><title>orch</title>
 <style>
@@ -30,7 +31,7 @@ const $=id=>document.getElementById(id), esc=s=>String(s??'').replace(/[<&]/g,c=
 async function tick(){
   const st=await (await fetch('/state')).json(), sc=await (await fetch('/stats')).json();
   $('status').textContent=st.status; $('wave').textContent=st.wave; $('budget').textContent=st.budget;
-  $('steps').innerHTML=Object.entries(st.steps).map(([id,s])=>`<tr><td>${esc(id)}<td>${esc(s.task)}<td>${esc((s.owns||[]).join(' '))}<td>${esc((s.needs||[]).join(' '))}<td>${esc(s.agent)}<td class=${s.status}>${s.status}${s.tail?`<details><summary>output</summary><pre>${esc(s.tail)}</pre></details>`:''}<td>${esc(s.secs)}</tr>`).join('');
+  $('steps').innerHTML=Object.entries(st.steps).map(([id,s])=>`<tr><td>${esc(id)}<td>${esc(s.task)}<td>${esc((s.owns||[]).join(' '))}<td>${esc((s.needs||[]).join(' '))}<td>${esc(s.agent)}<td class=${s.status}>${s.status}${s.tail?`<details><summary>output</summary><pre>${esc(s.tail)}</pre></details>`:''}${s.diff?`<div><a href="/diff/${esc(id)}" target=_blank>diff</a></div>`:''}${(s.out_of_bounds||[]).length?`<div class=failed>out of bounds: ${esc(s.out_of_bounds.join(' '))}</div>`:''}<td>${esc(s.secs)}</tr>`).join('');
   $('stats').innerHTML=Object.entries(sc).map(([k,v])=>`<tr><td>${esc(k)}<td>${v.pass} pass<td>${v.fail} fail</tr>`).join('');
   $('log').textContent=(st.log||[]).slice().reverse().join('\\n');
 }
@@ -49,6 +50,12 @@ class H(http.server.BaseHTTPRequestHandler):
         if self.path in FILES:
             f = FILES[self.path]
             return self._send(f.read_text() if f.exists() else "{}")
+        if self.path.startswith("/diff/"):
+            sid = self.path[6:]
+            f = RUNS / f"{sid}.diff"
+            if "/" in sid or ".." in sid or not f.exists():     # no path tricks
+                self.send_response(404); self.end_headers(); return
+            return self._send(f.read_text(), "text/plain; charset=utf-8")
         self._send(PAGE, "text/html")
 
     def do_POST(self):
