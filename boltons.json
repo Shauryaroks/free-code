@@ -1,0 +1,24 @@
+{
+  "repo": "../orch-target-boltons",
+  "budget": 20,
+  "steps": [
+    {"id": "urlutils", "task": "backend",
+     "owns": ["boltons/urlutils.py", "tests/test_urlutils.py"],
+     "prompt": "Fix boltons issue #309 in boltons/urlutils.py: URL('http://username:password?@www.proxy.com:443') and URL('http://username:pass/word@www.proxy.com:443') currently raise URLParseError ('expected integer for port'). Special characters '?' and '/' inside the userinfo (credentials) part must not be treated as query/path separators; the password must be preserved verbatim (URL(...).password == 'password?' / 'pass/word'). Add regression tests to tests/test_urlutils.py. Edit only boltons/urlutils.py and tests/test_urlutils.py. Run python3 -m pytest -q before finishing; all tests must pass.",
+     "check": "python3 -c \"from boltons.urlutils import URL; assert URL('http://username:password?@www.proxy.com:443').password=='password?'; assert URL('http://username:pass/word@www.proxy.com:443').password=='pass/word'; assert URL('http://username:password?@www.proxy.com:443').port==443\" && python3 -m pytest -q"},
+
+    {"id": "strutils", "task": "backend",
+     "owns": ["boltons/strutils.py", "tests/test_strutils.py"],
+     "prompt": "Fix boltons issue #142 in boltons/strutils.py: camel2under('NSDecimalToUInt') returns 'ns_decimal_to_u_int' but should return 'ns_decimal_to_uint' -- a run of capitals followed by lowercase is one word, and a trailing run of capitals is one word. Existing behaviour must hold: camel2under('NSDecimalCompact')=='ns_decimal_compact', camel2under('BasicPHPTest')=='basic_php_test', camel2under('HTTPResponse')=='http_response'. Add a regression test to tests/test_strutils.py. Edit only boltons/strutils.py and tests/test_strutils.py. Run python3 -m pytest -q before finishing; all tests must pass.",
+     "check": "python3 -c \"from boltons.strutils import camel2under as c; assert c('NSDecimalToUInt')=='ns_decimal_to_uint', c('NSDecimalToUInt'); assert c('NSDecimalCompact')=='ns_decimal_compact'; assert c('BasicPHPTest')=='basic_php_test'\" && python3 -m pytest -q"},
+
+    {"id": "cacheutils", "task": "backend",
+     "owns": ["boltons/cacheutils.py", "tests/test_cacheutils.py"],
+     "prompt": "Implement boltons issue #124 in boltons/cacheutils.py: LRU currently stores whatever on_miss returns, including None. Add a keyword argument cache_none=True to LRU.__init__ (and to LRI if it shares the code path). When cache_none is False, a None returned by on_miss is returned to the caller but NOT stored in the cache; the next access calls on_miss again. Default True preserves current behaviour exactly. Document the parameter in the class docstring in the same style as the existing ones. Add tests for both settings to tests/test_cacheutils.py. Edit only boltons/cacheutils.py and tests/test_cacheutils.py. Run python3 -m pytest -q before finishing; all tests must pass.",
+     "check": "python3 -c \"from boltons.cacheutils import LRU; n=[0]\ndef m(k): n[0]+=1; return None\nc=LRU(max_size=5,on_miss=m,cache_none=False); c['a']; c['a']; assert n[0]==2 and 'a' not in c, (n, dict(c)); d=LRU(max_size=5,on_miss=m); d['a']; d['a']; assert n[0]==3 and d['a'] is None\" && python3 -m pytest -q"},
+
+    {"id": "review", "task": "review", "needs": ["urlutils", "strutils", "cacheutils"], "owns": ["."],
+     "prompt": "Three bug fixes were just committed on this branch (git log -3). Review each diff for correctness, edge cases, and consistency with the surrounding code style. Fix real bugs only; do not refactor, rename, or reformat. Keep all tests passing (python3 -m pytest -q).",
+     "check": "python3 -m pytest -q"}
+  ]
+}
