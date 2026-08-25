@@ -247,3 +247,29 @@ def test_merge_back_root_owner_does_not_delete_repo(repo):
     orch.merge_back(str(repo), {"id": "review", "task": "review", "owns": ["."]}, "orch/x")
     assert (repo / ".git").exists(), "repo must survive a root-owned merge"
     assert (repo / "a.py").read_text() == "a1\n" and (repo / "c.py").read_text() == "c1\n"
+
+
+# --- token parsing + serial mode ---
+
+def test_parse_tokens_codex_and_claude():
+    assert orch.parse_tokens("codex", "blah\ntokens used\n11,152\nDone.") == 11152
+    j = '{"type":"result","usage":{"input_tokens":10,"output_tokens":5,"cache_read_input_tokens":100},"total_cost_usd":0.02}'
+    assert orch.parse_tokens("claude", j) == 115
+    assert orch.parse_tokens("opencode", "no numbers here") is None
+
+
+def test_serial_runs_one_at_a_time(tmp_path, monkeypatch):
+    import threading
+    _stub_git(monkeypatch)
+    active, peak = [0], [0]
+    lock = threading.Lock()
+    def fake(step, cwd, budget):
+        with lock: active[0] += 1; peak[0] = max(peak[0], active[0])
+        threading.Event().wait(0.05)
+        with lock: active[0] -= 1
+        return "opencode"
+    monkeypatch.setattr(orch, "run_step", fake)
+    steps = [{"id": "a", "task": "backend", "owns": ["x"], "prompt": "1"},
+             {"id": "b", "task": "frontend", "owns": ["y"], "prompt": "2"}]
+    orch.main(_pipeline(tmp_path, steps), serial=True)
+    assert peak[0] == 1

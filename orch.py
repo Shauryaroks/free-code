@@ -3,7 +3,7 @@
 
 State = the git repo. Handoff = the files on disk. That's the whole design.
 """
-import json, os, pathlib, shutil, subprocess, sys, threading, time
+import json, os, pathlib, re, shutil, subprocess, sys, threading, time
 from concurrent.futures import ThreadPoolExecutor
 
 ROOT = pathlib.Path(__file__).parent
@@ -26,7 +26,8 @@ AGENTS = {
     "copilot":  {"cmd": ["copilot", "--allow-all", "-s", "-p"], "cost": 0},            # Copilot Free
     "opencode": {"cmd": ["opencode", "run", "--dir", "{cwd}"], "cost": 0},              # Zen free models
     "crush":    {"cmd": ["crush", "run"], "cost": 0},                                  # BYOK
-    "claude":   {"cmd": ["claude", "--dangerously-skip-permissions", "-p"], "cost": 3},
+    "claude":   {"cmd": ["claude", "--dangerously-skip-permissions", "--output-format", "json", "-p"],
+                 "cost": 3},
 }
 
 # task type -> agents to try, cheapest first. Escalation order, not a fixed assignment.
@@ -99,6 +100,17 @@ def run_agent(agent, prompt, cwd):
     return r.returncode == 0, r.stdout + r.stderr, time.time() - t
 
 
+def parse_tokens(agent, out):
+    """Best-effort token count from an agent's stdout. None if the CLI doesn't say."""
+    if agent == "claude":
+        m = re.search(r'"usage"\s*:\s*(\{[^{}]*\})', out)
+        if m:
+            u = json.loads(m.group(1))
+            return sum(v for k, v in u.items() if k.endswith("tokens") and isinstance(v, int))
+    m = re.search(r"tokens used\s*\n?\s*([\d,]+)", out)
+    return int(m.group(1).replace(",", "")) if m else None
+
+
 def gate(step, cwd):
     """Verdict on the work just done. Cheap deterministic check beats an LLM judge."""
     check = step.get("check")
@@ -129,11 +141,16 @@ def run_step(step, cwd, budget):
         print(f"  -> {agent} ({task})")
         emit(step["id"], status="running", agent=agent, msg=f"start on {agent}")
         ok, out, secs = run_agent(agent, prompt, cwd)
+        RUNS.mkdir(exist_ok=True)
+        (RUNS / f"{step['id']}.{agent}.out").write_text(out)
+        tokens = parse_tokens(agent, out)
         passed, why = gate(step, cwd) if ok else (False, out[-2000:])
         record(task, agent, passed)
-        print(f"     {'PASS' if passed else 'FAIL'} in {secs:.0f}s")
+        print(f"     {'PASS' if passed else 'FAIL'} in {secs:.0f}s" + (f", {tokens} tokens" if tokens else ""))
+        attempts = _state["steps"].get(step["id"], {}).get("attempts", 0) + 1
         emit(step["id"], status="passed" if passed else "escalating", secs=round(secs),
-             tail=why[-1500:], msg=f"{'PASS' if passed else 'FAIL'} on {agent} ({secs:.0f}s)")
+             tokens=tokens, attempts=attempts, tail=why[-1500:],
+             msg=f"{'PASS' if passed else 'FAIL'} on {agent} ({secs:.0f}s, {tokens or '?'} tokens)")
         if passed:
             return agent
         # the redirect: feed the failure forward so the next tier isn't blind
@@ -280,7 +297,7 @@ def run_isolated(repo, step, budget):
         raise RuntimeError(f"{step['id']}: {e}") from e
 
 
-def main(pipeline_path, dry_run=False):
+def main(pipeline_path, dry_run=False, serial=False):
     pipeline = json.loads(pathlib.Path(pipeline_path).read_text())
     repo, steps = pipeline.get("repo", "."), pipeline["steps"]
     validate_ownership(steps)
@@ -302,7 +319,8 @@ def main(pipeline_path, dry_run=False):
     budget = {"left": pipeline.get("budget", 20)}
     done, pending, wave = set(), list(steps), 0
     STOP.unlink(missing_ok=True)
-    _state.update(status="running", wave=0, log=[], budget=budget["left"],
+    t0 = time.time()
+    _state.update(status="running", wave=0, log=[], budget=budget["left"], mode="serial" if serial else "parallel",
                   steps={s["id"]: {"status": "pending", "task": s["task"],
                                    "needs": s.get("needs", []), "owns": s["owns"]} for s in steps})
     emit(msg="run started")
@@ -317,7 +335,7 @@ def main(pipeline_path, dry_run=False):
         wave += 1
         emit(wave=wave, msg=f"wave {wave}: {', '.join(s['id'] for s in ready)}")
         print(f"\n=== wave {wave}: {', '.join(s['id'] for s in ready)} (parallel) ===")
-        with ThreadPoolExecutor(max_workers=len(ready)) as pool:
+        with ThreadPoolExecutor(max_workers=1 if serial else len(ready)) as pool:
             futures = [pool.submit(run_isolated, repo, s, budget) for s in ready]
             results, errors = [], []
             for f in futures:
@@ -337,10 +355,16 @@ def main(pipeline_path, dry_run=False):
         if errors:
             emit(status="failed", msg="; ".join(str(e) for e in errors))
             raise SystemExit("wave failed: " + "; ".join(str(e) for e in errors))
-    emit(status="done", budget=budget["left"], msg="run complete")
-    print(f"\ndone. budget left: {budget['left']}")
+    wall = round(time.time() - t0)
+    emit(status="done", budget=budget["left"], wall=wall, msg=f"run complete in {wall}s")
+    (RUNS / "summary.json").write_text(json.dumps({
+        "mode": _state["mode"], "wall": wall, "budget_left": budget["left"],
+        "steps": {k: {f: v.get(f) for f in ("agent", "secs", "tokens", "attempts", "out_of_bounds")}
+                  for k, v in _state["steps"].items()}}, indent=1))
+    print(f"\ndone in {wall}s. budget left: {budget['left']}")
 
 
 if __name__ == "__main__":
     args = [a for a in sys.argv[1:] if not a.startswith("--")]
-    main(args[0] if args else "pipeline.json", dry_run="--dry-run" in sys.argv)
+    main(args[0] if args else "pipeline.json", dry_run="--dry-run" in sys.argv,
+         serial="--serial" in sys.argv)
