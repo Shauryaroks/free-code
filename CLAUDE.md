@@ -11,7 +11,7 @@ merge-back is a path-scoped `git checkout` so no merge algorithm ever runs.
 
 ## Rules
 
-- **Git is allowed.** Commits are plain: the user's message only. **Never add a `Co-Authored-By` trailer, session link, or any mention of Claude** to commit messages or PR bodies. Commit only when asked.
+- Git is allowed. Co-author trailers on commits are fine. Commit only when asked. GitHub account is **Shauryaroks** (never shaurya757).
 
 ## Running
 
