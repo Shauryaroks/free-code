@@ -30,7 +30,10 @@ def run_cell(repo, step, agent):
     (OUT / f"{step['id']}.{agent}.diff").write_text(
         subprocess.run(["git", "diff", f"{base}..HEAD"], cwd=wt, capture_output=True, text=True).stdout)
     orch.cleanup(repo, {"id": f"mx-{step['id']}-{agent}"}, branch)
-    orch.record(step["task"], agent, passed)      # feeds the router too
+    if not passed and orch.QUOTA_RE.search(out):
+        cell["quota"] = True                       # not a skill signal
+    else:
+        orch.record(step["task"], agent, passed)   # feeds the router too
     return cell
 
 

@@ -27,7 +27,6 @@ AGENTS = {
                          "--skip-git-repo-check"], "cost": 0},                         # ChatGPT Free
     "copilot":  {"cmd": ["copilot", "--allow-all", "-s", "-p"], "cost": 0},            # Copilot Free
     "opencode": {"cmd": ["opencode", "run", "--dir", "{cwd}"], "cost": 0},              # Zen free models
-    "crush":    {"cmd": ["crush", "run"], "cost": 0},                                  # BYOK
     "claude":   {"cmd": ["claude", "--dangerously-skip-permissions", "--output-format", "json", "-p"],
                  "cost": 3},
 }
@@ -40,7 +39,7 @@ AGENTS = {
 ROUTES = {
     "frontend": ["agy", "opencode", "codex", "claude"],
     "backend":  ["codex", "agy", "opencode", "copilot", "claude"],
-    "qa":       ["agy", "copilot", "crush", "claude"],
+    "qa":       ["agy", "copilot", "claude"],
     "review":   ["claude"],          # quality gate: never cheap out on the judge
 }
 
