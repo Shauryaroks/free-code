@@ -151,3 +151,42 @@ def test_cycle_is_caught():
 def test_shipped_pipeline_is_valid():
     import pathlib
     orch.validate_ownership(json.loads(pathlib.Path("pipeline.json").read_text())["steps"])
+
+
+# --- real-git tests: merge_back semantics ---
+
+import subprocess
+
+
+def _git(cwd, *args):
+    return subprocess.run(["git", *args], cwd=cwd, check=True, capture_output=True, text=True).stdout
+
+
+@pytest.fixture
+def repo(tmp_path):
+    """Real git repo: one commit with a.py and b.py, then a branch that edits both and adds c.py."""
+    r = tmp_path / "repo"; r.mkdir()
+    _git(r, "init", "-q", "-b", "master"); _git(r, "config", "user.email", "t@t"); _git(r, "config", "user.name", "t")
+    (r / "a.py").write_text("a0\n"); (r / "b.py").write_text("b0\n")
+    _git(r, "add", "-A"); _git(r, "commit", "-qm", "init")
+    _git(r, "checkout", "-qb", "orch/x")
+    (r / "a.py").write_text("a1\n"); (r / "b.py").write_text("b1\n"); (r / "c.py").write_text("c1\n")
+    _git(r, "add", "-A"); _git(r, "commit", "-qm", "wip")
+    _git(r, "checkout", "-q", "master")
+    return r
+
+
+def test_merge_back_copies_owned_file_and_drops_unowned(repo):
+    step = {"id": "x", "task": "backend", "owns": ["a.py"]}
+    orch.merge_back(str(repo), step, "orch/x")
+    assert (repo / "a.py").read_text() == "a1\n"      # owned: merged
+    assert (repo / "b.py").read_text() == "b0\n"      # unowned: untouched
+    assert not (repo / "c.py").exists()               # unowned new file: dropped
+    assert "x (backend)" in _git(repo, "log", "-1", "--format=%s")
+
+
+def test_merge_back_propagates_owned_file_deletion(repo):
+    _git(repo, "checkout", "-q", "orch/x"); (repo / "a.py").unlink()
+    _git(repo, "add", "-A"); _git(repo, "commit", "-qm", "rm a"); _git(repo, "checkout", "-q", "master")
+    orch.merge_back(str(repo), {"id": "x", "task": "backend", "owns": ["a.py"]}, "orch/x")
+    assert not (repo / "a.py").exists()

@@ -205,12 +205,21 @@ def worktree(repo, step):
     return str(wt), branch
 
 
+def remove_path(p):
+    """rm -rf for a file or a dir. Missing is fine."""
+    p = pathlib.Path(p)
+    if p.is_dir():
+        shutil.rmtree(p, ignore_errors=True)
+    elif p.exists():
+        p.unlink()
+
+
 def merge_back(repo, step, branch):
-    """Path-scoped checkout of only the owned dirs. No merge algorithm runs, so
-    no conflict can occur -- validate_ownership already proved they are disjoint.
-    rm first so deletions made by the agent propagate."""
+    """Path-scoped checkout of only the owned paths (files or dirs). No merge
+    algorithm runs, so no conflict can occur -- validate_ownership already proved
+    concurrent owners are disjoint. Remove first so agent deletions propagate."""
     for d in owned(step):
-        shutil.rmtree(pathlib.Path(repo) / d, ignore_errors=True)
+        remove_path(pathlib.Path(repo) / d)
         subprocess.run(["git", "checkout", branch, "--", d], cwd=repo, capture_output=True)
     subprocess.run(["git", "add", "-A"], cwd=repo)
     subprocess.run(["git", "commit", "-qm", f"{step['id']} ({step['task']})"], cwd=repo)
